@@ -1,0 +1,4 @@
+# aptos-core builds against tokio's unstable APIs (e.g. Builder::disable_lifo_slot),
+# matching aptos-core's own .cargo/config.toml. Required for the aptos-coupled crates.
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

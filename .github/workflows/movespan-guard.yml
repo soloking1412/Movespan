@@ -1,0 +1,36 @@
+# Reusable regression guard. Copy this into a Move project's repository and
+# adjust the package path, named address, and workload to fail any pull request
+# that drops the contract's parallelizability below the threshold.
+name: movespan-guard
+
+on: [pull_request]
+
+jobs:
+  contention:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install Aptos CLI
+        run: |
+          curl -fsSL "https://aptos.dev/scripts/install_cli.sh" | sh
+          echo "$HOME/.aptos/bin" >> "$GITHUB_PATH"
+
+      - name: Compile the Move package
+        run: aptos move compile --package-dir move --named-addresses app=0xC0FFEE
+
+      - name: Build Movespan
+        run: cargo build --release -p movespan-cli --locked
+        working-directory: app
+
+      - name: Fail the PR if parallelizability regresses
+        run: |
+          app/target/release/movespan analyze \
+            --package move \
+            --module-address 0xC0FFEE \
+            --workload movespan.workload.toml \
+            --min-score 0.60

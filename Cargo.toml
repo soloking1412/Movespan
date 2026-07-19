@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/movespan-types",
+    "crates/movespan-model",
+    "crates/movespan-rules",
+    "crates/movespan-report",
+]
+# The VM-coupled crates live in `app/` as a separate workspace so the pure logic
+# above builds and tests without fetching the multi-gigabyte aptos-core deps.
+exclude = ["app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/movespan-labs/movespan"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+movespan-types = { path = "crates/movespan-types" }
+movespan-model = { path = "crates/movespan-model" }
+movespan-rules = { path = "crates/movespan-rules" }
+movespan-report = { path = "crates/movespan-report" }
+
+[profile.release]
+lto = "thin"

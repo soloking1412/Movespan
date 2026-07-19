@@ -1,0 +1,6 @@
+# Matches aptos-core's pinned toolchain at aptos-node-v1.48.2. Newer rustc
+# rejects some aptos-core crates (stricter borrow checking), so the app
+# workspace is built with the version Aptos ships against.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

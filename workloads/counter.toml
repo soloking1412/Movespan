@@ -1,0 +1,11 @@
+# 50 users hammering one global counter. Expected result: parallelizability
+# near zero, with the single Counter resource as the only hotspot.
+accounts = 50
+txns = 2000
+seed = 42
+
+[[init]]
+function = "0xC0FFEE::counter::init"
+
+[[calls]]
+function = "0xC0FFEE::counter::increment"

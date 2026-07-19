@@ -1,0 +1,35 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  # Pure logic (types, model, rules, report): fast, no aptos-core dependency.
+  logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # VM-coupled layer (capture, sandbox, replay, CLI): heavy aptos-core build.
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      # Toolchain and the tokio_unstable flag come from app/rust-toolchain.toml
+      # and app/.cargo/config.toml; the pin matches aptos-node-v1.48.2.
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      # --locked uses the committed app/Cargo.lock, which pins the aptos-core
+      # transitive crypto crates (pkcs8/slh-dsa RCs) to a compatible set.
+      - run: cargo build --locked
