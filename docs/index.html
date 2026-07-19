@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Movespan — Block-STM contention profiler for Aptos Move</title>
+<meta name="description" content="Movespan finds the resource that is serializing your Aptos Move contract, and tells you what fixing it is worth.">
+<style>
+  :root{
+    --bg:#0a0b0d;
+    --panel:#0f1116;
+    --panel-2:#12151b;
+    --line:#1c2027;
+    --line-2:#262b34;
+    --text:#e7e9ee;
+    --dim:#949bab;
+    --faint:#5f6775;
+    --hot:#ff5c38;
+    --cool:#2ee6a8;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:var(--sans);font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  a{color:inherit}
+  h1,h2,h3{line-height:1.15;letter-spacing:-0.02em;margin:0}
+  code,kbd,pre{font-family:var(--mono)}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .rule{height:1px;background:var(--line);border:0;margin:0}
+
+  /* ---------- top bar ---------- */
+  .bar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:20px 0;border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:11px;font-weight:600;letter-spacing:-0.01em}
+  .glyph{display:block}
+  .bar nav{display:flex;gap:26px;font-size:14px;color:var(--dim)}
+  .bar nav a{text-decoration:none}
+  .bar nav a:hover{color:var(--text)}
+  @media(max-width:720px){.bar nav a:not(.gh){display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{padding:76px 0 8px}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:0.14em;
+    text-transform:uppercase;color:var(--faint);margin-bottom:22px;
+  }
+  .hero h1{font-size:clamp(34px,5.4vw,58px);font-weight:650;max-width:15ch}
+  .hero h1 em{font-style:normal;color:var(--hot)}
+  .lede{margin:26px 0 0;font-size:clamp(16px,1.9vw,19px);color:var(--dim);max-width:56ch}
+  .lede strong{color:var(--text);font-weight:550}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+  .btn{
+    display:inline-flex;align-items:center;gap:9px;
+    padding:11px 17px;border-radius:7px;text-decoration:none;
+    font-size:14px;font-weight:550;border:1px solid var(--line-2);
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .btn.primary{background:var(--text);color:#0a0b0d;border-color:var(--text)}
+  .btn.primary:hover{background:#fff}
+  .btn.ghost:hover{border-color:var(--faint);background:var(--panel)}
+
+  /* ---------- scheduler ---------- */
+  .sched-shell{margin:56px 0 0;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+  .sched-head{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap;
+  }
+  .sched-title{font-family:var(--mono);font-size:12.5px;color:var(--dim);letter-spacing:0.02em}
+  .sched-title b{color:var(--text);font-weight:550}
+  .toggle{display:flex;border:1px solid var(--line-2);border-radius:7px;overflow:hidden}
+  .toggle button{
+    appearance:none;background:transparent;border:0;cursor:pointer;
+    font-family:var(--mono);font-size:12px;color:var(--dim);
+    padding:7px 13px;transition:background .15s ease,color .15s ease;
+  }
+  .toggle button+button{border-left:1px solid var(--line-2)}
+  .toggle button[aria-pressed="true"]{background:var(--panel-2);color:var(--text)}
+  .toggle button:hover{color:var(--text)}
+
+  .sched-body{padding:22px 18px 8px 54px;position:relative}
+  .lanes{position:relative}
+  .lane{
+    position:relative;height:22px;margin-bottom:6px;
+    border-radius:4px;background:
+      linear-gradient(90deg,rgba(255,255,255,.028) 0 1px,transparent 1px 100%) 0 0/ calc(100%/24) 100%;
+  }
+  .lane::after{content:"";position:absolute;inset:0;border-radius:4px;border:1px solid rgba(255,255,255,.035)}
+  .lane-label{
+    position:absolute;left:-42px;top:50%;transform:translateY(-50%);
+    font-family:var(--mono);font-size:10.5px;color:var(--faint);
+  }
+  .blk{
+    position:absolute;top:3px;height:16px;border-radius:3px;
+    background:var(--hot);
+    transition:left .72s cubic-bezier(.65,.02,.24,1),
+               transform .72s cubic-bezier(.65,.02,.24,1),
+               background-color .5s ease;
+    will-change:left,transform;
+  }
+  .sched.parallel .blk{background:var(--cool)}
+  .span-line{
+    position:absolute;top:-8px;bottom:-2px;width:1px;background:var(--text);opacity:.45;
+    transition:left .72s cubic-bezier(.65,.02,.24,1);
+  }
+  .span-tag{
+    position:absolute;top:-21px;transform:translateX(calc(-100% - 7px));
+    font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap;
+  }
+  .sched-foot{
+    display:flex;gap:30px;flex-wrap:wrap;
+    padding:14px 18px 16px;border-top:1px solid var(--line);margin-top:14px;
+  }
+  .stat{display:flex;flex-direction:column;gap:2px}
+  .stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .stat .v{font-family:var(--mono);font-size:19px;font-variant-numeric:tabular-nums;transition:color .4s ease}
+  .sched.serial .v.live{color:var(--hot)}
+  .sched.parallel .v.live{color:var(--cool)}
+  .caption{margin:14px 2px 0;font-size:13.5px;color:var(--faint);max-width:74ch}
+
+  /* ---------- sections ---------- */
+  section{padding:86px 0}
+  .sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:12px}
+  .sec-num{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  h2{font-size:clamp(23px,3vw,31px);font-weight:620}
+  .sec-lede{color:var(--dim);max-width:64ch;margin:16px 0 0;font-size:16.5px}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:34px}
+  @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:11px;background:var(--panel);overflow:hidden}
+  .card-head{
+    padding:11px 15px;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:12px;color:var(--dim);
+    display:flex;align-items:center;gap:8px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot.hot{background:var(--hot)}
+  .dot.cool{background:var(--cool)}
+  .card pre{margin:0;padding:16px 15px;overflow-x:auto;font-size:12.5px;line-height:1.65;color:#cfd4de}
+  .card pre .c{color:var(--faint)}
+  .card pre .bad{color:var(--hot)}
+  .card pre .good{color:var(--cool)}
+  .card pre .kw{color:#9db4ff}
+
+  /* terminal */
+  .term{border:1px solid var(--line);border-radius:11px;background:#08090b;overflow:hidden;margin-top:34px}
+  .term-head{padding:11px 15px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .term pre{margin:0;padding:20px 18px;overflow-x:auto;font-size:12.5px;line-height:1.7;color:#c8ced9}
+  .term .p{color:var(--faint)}
+  .term .hl{color:var(--text);font-weight:600}
+  .term .bad{color:var(--hot)}
+  .term .good{color:var(--cool)}
+
+  /* pipeline */
+  .pipe{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:40px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  @media(max-width:820px){.pipe{grid-template-columns:1fr}}
+  .step{padding:22px 20px;border-right:1px solid var(--line);background:var(--panel)}
+  .step:last-child{border-right:0}
+  @media(max-width:820px){.step{border-right:0;border-bottom:1px solid var(--line)}.step:last-child{border-bottom:0}}
+  .step .n{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.1em}
+  .step h3{font-size:16px;margin:9px 0 8px;font-weight:600}
+  .step p{margin:0;font-size:14px;color:var(--dim);line-height:1.62}
+
+  /* table */
+  .tbl{width:100%;border-collapse:collapse;margin-top:32px;font-size:14.5px}
+  .tbl th,.tbl td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line)}
+  .tbl th{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:500}
+  .tbl td.n{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .tbl td .win{color:var(--cool);font-weight:600}
+  .scroll-x{overflow-x:auto}
+
+  /* limits */
+  .limits{list-style:none;padding:0;margin:32px 0 0;border-top:1px solid var(--line)}
+  .limits li{display:grid;grid-template-columns:128px 1fr;gap:20px;padding:15px 2px;border-bottom:1px solid var(--line);font-size:15px;color:var(--dim)}
+  @media(max-width:640px){.limits li{grid-template-columns:1fr;gap:5px}}
+  .tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding-top:3px}
+  .tag.ok{color:var(--cool)}
+  .tag.est{color:#e8b73a}
+  .tag.no{color:var(--faint)}
+  .limits li b{color:var(--text);font-weight:550}
+
+  /* install */
+  .install{margin-top:32px;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#08090b}
+  .install pre{margin:0;padding:20px 18px;overflow-x:auto;font-size:13px;line-height:1.85;color:#c8ced9}
+  .install .c{color:var(--faint)}
+  .install .d{color:var(--cool)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 60px;margin-top:40px}
+  .foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:13.5px;color:var(--faint)}
+  .foot a{color:var(--dim);text-decoration:none}
+  .foot a:hover{color:var(--text)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="brand">
+      <svg class="glyph" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <rect x="0.5" y="1.5" width="19" height="3" rx="1.5" fill="#ff5c38"/>
+        <rect x="0.5" y="8" width="7" height="3" rx="1.5" fill="#2ee6a8"/>
+        <rect x="8.5" y="8" width="7" height="3" rx="1.5" fill="#2ee6a8"/>
+        <rect x="0.5" y="14.5" width="4.4" height="3" rx="1.5" fill="#2ee6a8"/>
+        <rect x="6" y="14.5" width="4.4" height="3" rx="1.5" fill="#2ee6a8"/>
+        <rect x="11.5" y="14.5" width="4.4" height="3" rx="1.5" fill="#2ee6a8"/>
+      </svg>
+      Movespan
+    </div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#results">Results</a>
+      <a href="#limits">Accuracy</a>
+      <a href="#start">Install</a>
+      <a class="gh" href="https://github.com/soloking1412/Movespan">GitHub&nbsp;↗</a>
+    </nav>
+  </header>
+
+  <!-- ============ HERO ============ -->
+  <div class="hero">
+    <div class="eyebrow">Block-STM contention profiler · Aptos Move</div>
+    <h1>Your contract is <em>serializing</em>. Find out where.</h1>
+    <p class="lede">
+      Aptos runs a block in parallel and re-executes only what conflicts. But one counter every
+      transaction touches, one pool every swap mutates, and the whole block collapses into a single
+      chain. <strong>Movespan names the resource costing you parallelism — and tells you what fixing
+      it is worth, before you refactor anything.</strong>
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/soloking1412/Movespan">View on GitHub</a>
+      <a class="btn ghost" href="#start">Install</a>
+    </div>
+  </div>
+
+  <!-- ============ SCHEDULER ============ -->
+  <div class="sched-shell">
+    <div class="sched-head">
+      <div class="sched-title">
+        <b>counter fixture</b> · 24 transactions · 8 Block-STM worker threads
+      </div>
+      <div class="toggle" role="group" aria-label="Schedule state">
+        <button id="btn-serial" aria-pressed="true">Contended</button>
+        <button id="btn-parallel" aria-pressed="false">After fix</button>
+      </div>
+    </div>
+
+    <div class="sched-body">
+      <div class="sched serial" id="sched">
+        <div class="lanes" id="lanes">
+          <div class="span-line" id="spanline"><span class="span-tag" id="spantag">span 24</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sched-foot">
+      <div class="stat">
+        <span class="k">Parallelizability</span>
+        <span class="v live" id="s-par">12.5%</span>
+      </div>
+      <div class="stat">
+        <span class="k">Speedup</span>
+        <span class="v live" id="s-spd">1.00x</span>
+      </div>
+      <div class="stat">
+        <span class="k">Conflict edges</span>
+        <span class="v" id="s-edg">99</span>
+      </div>
+      <div class="stat">
+        <span class="k">Blocking resource</span>
+        <span class="v" id="s-res" style="font-size:13px;padding-top:5px">counter::Counter</span>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    Left: every transaction reads the value the one before it wrote, so all 24 land on a single
+    worker. Right: the counter becomes an aggregator, the dependency disappears, and the same work
+    spreads across all 8. Measured on the real fixture — 7.69x of an 8x ideal.
+  </p>
+
+  <!-- ============ PROBLEM ============ -->
+  <section id="problem">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Two lines of Move, an order of magnitude apart</h2></div>
+    <p class="sec-lede">
+      Nothing in the toolchain flags the difference. Both compile, both pass tests, both are
+      correct. One of them throws away the reason you chose Aptos.
+    </p>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><span class="dot hot"></span> serializes the block</div>
+<pre><span class="c">// every swap mutates the same Pool</span>
+<span class="kw">public entry fun</span> swap(user: &amp;signer, amt: u64) {
+    <span class="kw">let</span> pool = borrow_global_mut&lt;Pool&gt;(@amm);
+    pool.reserve_x = pool.reserve_x + amt;
+    <span class="c">// ^ 199 read-after-write deps</span>
+    <span class="c">//   → <span class="bad">1.00x on 32 threads</span></span>
+}</pre>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot cool"></span> stays parallel</div>
+<pre><span class="c">// shard the hot field per user</span>
+<span class="kw">public entry fun</span> swap(user: &amp;signer, amt: u64) {
+    <span class="kw">let</span> s = borrow_global_mut&lt;Shard&gt;(shard_of(user));
+    s.reserve_x = s.reserve_x + amt;
+    <span class="c">// ^ writers stop colliding</span>
+    <span class="c">//   → <span class="good">9.11x on 32 threads</span></span>
+}</pre>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ OUTPUT ============ -->
+  <section id="output">
+    <div class="sec-head"><span class="sec-num">02</span><h2>It doesn't say "slow". It says what to change.</h2></div>
+    <p class="sec-lede">
+      Every hotspot is re-scored with that location made non-conflicting, so the projected speedup is
+      measured against the model rather than guessed at.
+    </p>
+
+    <div class="term">
+      <div class="term-head">$ movespan analyze --package ./amm --module-address 0xA11CE --threads 32</div>
+<pre><span class="p">MOVESPAN CONTENTION REPORT</span>
+<span class="p">==========================</span>
+
+Transactions       : 200
+Threads modeled    : 32
+Parallelizability  : <span class="bad">3.1%</span>
+Estimated speedup  : <span class="bad">1.00x</span> of 32x ideal
+Work / span        : 82412 / 82412
+Conflict edges     : 235
+
+<span class="p">TOP CONTENTION HOTSPOTS</span>
+<span class="p">-----------------------</span>
+ 1. <span class="hl">0xa11ce::amm::Pool</span>  (199 deps, blocked cost 82372)
+ 2. 0x700d…::amm::LpBalance  (5 deps, blocked cost 250)
+
+<span class="p">RECOMMENDATIONS</span>
+<span class="p">---------------</span>
+
+[1] <span class="hl">0xa11ce::amm::Pool</span>
+    problem: a shared resource many transactions mutate together.
+    fix    : shard the resource per user address so unrelated
+             writers stop colliding on one object.
+    impact : <span class="bad">1.00x</span> → <span class="good">9.11x</span>  <span class="good">(+8.11x, 28% parallel)</span></pre>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ HOW ============ -->
+  <section id="how">
+    <div class="sec-head"><span class="sec-num">03</span><h2>Observed, not inferred</h2></div>
+    <p class="sec-lede">
+      Access sets come from the actual VM. Static analysis cannot know which dynamic address a
+      transaction will touch, and a wrong access set produces a confidently wrong report.
+    </p>
+
+    <div class="pipe">
+      <div class="step">
+        <div class="n">01 / EXECUTE</div>
+        <h3>Real transactions</h3>
+        <p>Your package is published into an in-memory chain and the workload runs against it — through the real Aptos VM, not a simulation of one.</p>
+      </div>
+      <div class="step">
+        <div class="n">02 / CAPTURE</div>
+        <h3>Every read and write</h3>
+        <p>A recording state view wraps the executor and observes each read; writes come from the transaction's write set. One transaction per block, so attribution is exact.</p>
+      </div>
+      <div class="step">
+        <div class="n">03 / MODEL</div>
+        <h3>The conflict graph</h3>
+        <p>Transaction <em>j</em> depends on <em>i</em> when it reads what <em>i</em> wrote. A list scheduler over Block-STM's workers gives work, span, and the parallelism actually available.</p>
+      </div>
+      <div class="step">
+        <div class="n">04 / ADVISE</div>
+        <h3>Simulate the fix</h3>
+        <p>Rank locations by the work they block, map each to a concrete Aptos refactor, then re-run the whole model with that location neutralized.</p>
+      </div>
+    </div>
+
+    <p class="caption" style="margin-top:24px">
+      Gas payment, sequence numbers and other framework state are excluded on purpose. They touch
+      100% of every block, so they out-rank whatever your contract actually does wrong — and no
+      contract author can refactor them.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ RESULTS ============ -->
+  <section id="results">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Measured, and checkable by hand</h2></div>
+    <p class="sec-lede">
+      The counter fixture is a correctness oracle rather than a benchmark. 100 transactions against
+      one global counter <em>must</em> produce exactly 99 read-after-write dependencies, a fully
+      serial schedule, and a score of exactly <span class="mono">1/8</span> on 8 threads. It does.
+      That is why the model is trustworthy and not merely plausible.
+    </p>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr><th>Fixture</th><th>Workload</th><th>Parallelizability</th><th>Top hotspot</th><th>Simulated fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="n">counter</td>
+            <td class="n">100 txns · 8 threads</td>
+            <td class="n">12.5%</td>
+            <td class="n">counter::Counter <span style="color:var(--faint)">(99 deps)</span></td>
+            <td class="n"><span class="win">1.00x → 7.69x</span></td>
+          </tr>
+          <tr>
+            <td class="n">amm</td>
+            <td class="n">200 txns · 32 threads</td>
+            <td class="n">3.1%</td>
+            <td class="n">amm::Pool <span style="color:var(--faint)">(199 deps)</span></td>
+            <td class="n"><span class="win">1.00x → 9.11x</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">
+      Figures from a debug build, hence the reduced transaction counts. The committed workloads use
+      2000 transactions and want a release build.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ LIMITS ============ -->
+  <section id="limits">
+    <div class="sec-head"><span class="sec-num">05</span><h2>What these numbers are, precisely</h2></div>
+    <p class="sec-lede">
+      A profiler that overstates its own accuracy is worse than no profiler. So, plainly:
+    </p>
+
+    <ul class="limits">
+      <li><span class="tag ok">Exact</span><span><b>The read and write sets.</b> They come from the VM, not from analysis.</span></li>
+      <li><span class="tag ok">Exact</span><span><b>The dependency graph and hotspot ranking</b>, and the direction and relative magnitude of a fix.</span></li>
+      <li><span class="tag est">Estimate</span><span><b>Absolute throughput.</b> The scheduler models Block-STM's behaviour but is not a validator. Read 9.11x as "a large win worth doing", not as a TPS guarantee.</span></li>
+      <li><span class="tag no">Not modeled</span><span><b>Validator-level effects</b> — network, consensus, storage I/O, and Block-STM's own re-execution and abort overhead.</span></li>
+      <li><span class="tag no">Untested</span><span><b>Mainnet replay</b> is implemented but has not yet been exercised against a live fullnode.</span></li>
+    </ul>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ START ============ -->
+  <section id="start">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Run it</h2></div>
+    <p class="sec-lede">
+      The model is a pure Rust workspace with no Aptos dependency — it compiles and tests in under a
+      second. Only the capture layer needs aptos-core.
+    </p>
+
+    <div class="install">
+<pre><span class="c"># 1 — prove the model (no Aptos build needed)</span>
+<span class="d">cargo</span> test --workspace
+
+<span class="c"># 2 — build the profiler (one-time aptos-core build)</span>
+<span class="d">cd</span> app &amp;&amp; <span class="d">cargo</span> build --release --locked
+
+<span class="c"># 3 — compile a contract and profile it</span>
+(<span class="d">cd</span> fixtures/counter &amp;&amp; aptos move compile --named-addresses counter=0xC0FFEE)
+
+app/target/release/<span class="d">movespan</span> analyze \
+  --package fixtures/counter \
+  --module-address 0xC0FFEE \
+  --workload workloads/counter.toml</pre>
+    </div>
+
+    <p class="caption">
+      <span class="mono">--min-score 0.4</span> exits non-zero below a threshold, so a pull request
+      that regresses contention fails CI the way an untested one fails a coverage gate.
+    </p>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap foot">
+    <div>MIT licensed · built against aptos-node-v1.48.2</div>
+    <div><a href="https://github.com/soloking1412/Movespan">GitHub</a></div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var LANES = 8, N = 24;
+  var lanesEl = document.getElementById('lanes');
+  var sched   = document.getElementById('sched');
+  var spanEl  = document.getElementById('spanline');
+  var spanTag = document.getElementById('spantag');
+  var bS = document.getElementById('btn-serial');
+  var bP = document.getElementById('btn-parallel');
+  var sPar = document.getElementById('s-par'), sSpd = document.getElementById('s-spd');
+  var sEdg = document.getElementById('s-edg'), sRes = document.getElementById('s-res');
+
+  var unit = 100 / N;              // one slot = 1/24 of the track width
+  var blocks = [];
+
+  for (var l = 0; l < LANES; l++){
+    var lane = document.createElement('div');
+    lane.className = 'lane';
+    var lab = document.createElement('span');
+    lab.className = 'lane-label';
+    lab.textContent = 'w' + l;
+    lane.appendChild(lab);
+    lanesEl.appendChild(lane);
+  }
+  var laneEls = lanesEl.querySelectorAll('.lane');
+
+  // Blocks live on the .lanes container, not inside a lane, so they paint above
+  // every lane once they move down. Position is driven purely by transform.
+  for (var i = 0; i < N; i++){
+    var b = document.createElement('div');
+    b.className = 'blk';
+    b.style.width = 'calc(' + unit + '% - 3px)';
+    b.style.left = '0';
+    b.style.transitionDelay = (i * 14) + 'ms';
+    lanesEl.appendChild(b);
+    blocks.push(b);
+  }
+
+  var laneStep = 28; // lane height + margin
+
+  // Horizontal position is a percentage so the browser resolves it against the
+  // track itself. Measuring clientWidth here would collapse every block to x=0
+  // whenever the element has no width yet (initial load, hidden container).
+  function layout(parallel){
+    for (var i = 0; i < N; i++){
+      var lane = parallel ? (i % LANES) : 0;
+      var slot = parallel ? Math.floor(i / LANES) : i;
+      blocks[i].style.left = (slot * unit) + '%';
+      blocks[i].style.transform = 'translateY(' + (lane * laneStep) + 'px)';
+    }
+    var spanSlots = parallel ? (N / LANES) : N;
+    spanEl.style.left = (spanSlots * unit) + '%';
+    spanTag.textContent = 'span ' + spanSlots;
+  }
+
+  function setState(parallel){
+    sched.className = 'sched ' + (parallel ? 'parallel' : 'serial');
+    bS.setAttribute('aria-pressed', String(!parallel));
+    bP.setAttribute('aria-pressed', String(parallel));
+    sPar.textContent = parallel ? '96.1%' : '12.5%';
+    sSpd.textContent = parallel ? '7.69x' : '1.00x';
+    sEdg.textContent = parallel ? '0' : '99';
+    sRes.textContent = parallel ? 'none' : 'counter::Counter';
+    layout(parallel);
+  }
+
+  var isParallel = false, auto = null;
+  function apply(p, manual){
+    isParallel = p; setState(p);
+    if (manual && auto){ clearInterval(auto); auto = null; }
+  }
+  bS.addEventListener('click', function(){ apply(false, true); });
+  bP.addEventListener('click', function(){ apply(true, true); });
+
+  setState(false);
+  window.addEventListener('resize', function(){ layout(isParallel); });
+
+  // auto-play once the diagram is on screen; stops on first manual interaction
+  var started = false;
+  function start(){
+    if (started) return; started = true;
+    setTimeout(function(){ if (auto !== null || !started) return; apply(true); }, 1400);
+    auto = setInterval(function(){ apply(!isParallel); }, 3600);
+  }
+  if ('IntersectionObserver' in window){
+    var io = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if (e.isIntersecting) { start(); io.disconnect(); } });
+    }, {threshold:.35});
+    io.observe(sched);
+  } else { start(); }
+})();
+</script>
+</body>
+</html>
